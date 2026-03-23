@@ -6,7 +6,9 @@ import time
 import requests
 import tempfile
 import io
-from docx import Document # 🌟 워드 파일 생성을 위해 추가된 라이브러리
+import re  # 🌟 정규표현식(텍스트 검색)을 위한 라이브러리 추가
+from docx import Document
+from docx.enum.text import WD_COLOR_INDEX  # 🌟 워드 형광펜 색상 기능을 위해 추가
 
 # ---------------------------------------------------------
 # 1. 초기 설정 및 라이브러리 폴더 준비
@@ -32,13 +34,50 @@ def get_optimal_model():
         if 'gemini' in name: return name
     raise ValueError("사용 가능한 모델을 찾을 수 없습니다.")
 
-# 🌟 워드 파일 생성 함수 (새로 추가됨)
+# ---------------------------------------------------------
+# 🌟 보강된 기능: 워드 파일 서식(볼드, 띄어쓰기, 형광펜) 자동 적용
+# ---------------------------------------------------------
 def generate_word_file(title, content):
     doc = Document()
-    doc.add_heading(title, level=1) # 문서 맨 위에 큰 제목 추가
-    doc.add_paragraph(content)      # AI가 요약한 내용 추가
+    doc.add_heading(title, level=1)
     
-    # 다운로드를 위해 파일을 메모리(버퍼)에 임시 저장
+    lines = content.split('\n')
+    first_subheading_done = False # 첫 소제목 위에는 빈 줄을 넣지 않기 위한 장치
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # 1. 소제목 확인 (줄이 "1.", "2." 처럼 숫자와 마침표로 시작하는지 검사)
+        is_subheading = bool(re.match(r'^\d+\.', line))
+        
+        # 소제목일 경우 위로 한 줄 띄우고 문단 생성
+        if is_subheading:
+            if first_subheading_done:
+                doc.add_paragraph() # 빈 줄(단락) 추가
+            first_subheading_done = True
+            p = doc.add_paragraph()
+        else:
+            p = doc.add_paragraph() # 일반 문단 생성
+
+        # 2. [강조] 태그를 찾아 형광펜 칠하기
+        # 텍스트를 [강조] 태그 기준으로 조각조각 자릅니다.
+        parts = re.split(r'(\[강조\].*?\[/강조\])', line)
+        
+        for part in parts:
+            if part.startswith('[강조]') and part.endswith('[/강조]'):
+                clean_text = part[4:-5] # '[강조]'와 '[/강조]' 글자만 깔끔하게 제거
+                run = p.add_run(clean_text)
+                if is_subheading:
+                    run.bold = True
+                run.font.highlight_color = WD_COLOR_INDEX.YELLOW # 💛 노란색 형광펜 칠하기
+            else:
+                if part: # 빈 텍스트가 아니면 추가
+                    run = p.add_run(part)
+                    if is_subheading:
+                        run.bold = True # 소제목 줄의 나머지 텍스트도 모두 굵게 처리
+                        
     buffer = io.BytesIO()
     doc.save(buffer)
     buffer.seek(0)
@@ -54,7 +93,7 @@ with st.sidebar:
 tab1, tab2 = st.tabs(["📂 1단계: 교안 라이브러리 등록", "🎬 2단계: 동영상 링크 분석 및 요약"])
 
 # ---------------------------------------------------------
-# [탭 1] 교안 PDF 업로드 및 라이브러리 저장
+# [탭 1] 교안 PDF 업로드 및 라이브러리 저장 (변경 없음)
 # ---------------------------------------------------------
 with tab1:
     st.header("1. 교안 PDF 등록하기")
@@ -153,10 +192,10 @@ with tab2:
                         with open(f"library/pdfs/{selected_course}.txt", "r", encoding="utf-8") as f:
                             course_full_text = f.read()
                             
-                        # 🌟 프롬프트 수정: 마크다운 기호를 빼고 워드 문서용으로 깔끔하게 작성하도록 지시
+                        # 🌟 프롬프트 수정: 비밀 태그([강조]) 사용 및 소제목 규칙 지시
                         final_prompt = f"""
                         당신은 훌륭한 사회복지사 학습 조교입니다.
-                        아래 두 가지 자료를 대조하여 '{selected_course}'의 {week}주차 {session}강에 대한 노트 필기 정리본을 작성해 주세요.
+                        아래 두 자료를 대조하여 '{selected_course}'의 {week}주차 {session}강 노트 필기본을 작성해 주세요.
 
                         [자료 1: 영상 핵심 내용]
                         {video_key_points}
@@ -164,10 +203,11 @@ with tab2:
                         [자료 2: 전체 교안 텍스트]
                         {course_full_text}
 
-                        [지시 사항]
-                        1. [자료 1]의 핵심 내용을 바탕으로, [자료 2]에서 자세한 설명을 찾아내세요.
-                        2. 컴퓨터 프로그래밍 기호(마크다운의 **, # 등)는 절대 사용하지 마세요.
-                        3. 어르신들이 읽기 편하도록 숫자(1, 2, 3), 기호(-, ※, ▶)를 활용해 들여쓰기와 줄바꿈을 아주 깔끔하게 정리한 '일반 텍스트'로 요약해 주세요.
+                        [작성 지시 사항 - 매우 중요]
+                        1. 내용 대조: [자료 1]의 핵심 내용을 바탕으로 [자료 2]에서 상세한 설명을 찾아 요약하세요.
+                        2. 공통 강조점 하이라이트: 영상(자료 1)과 교안(자료 2) 양쪽 모두에서 중요하게 다뤄진 핵심 단어나 문장은 반드시 앞뒤에 [강조] 와 [/강조] 태그를 붙이세요. (예: [강조]바이스텍의 7대 원칙[/강조]은 반드시 숙지해야 합니다.)
+                        3. 소제목 규칙: 내용의 큰 주제가 바뀔 때는 반드시 "1. 주제명", "2. 주제명" 처럼 숫자와 마침표로 시작하는 소제목을 적어주세요.
+                        4. 포맷: 마크다운 기호(**, # 등)는 절대 쓰지 말고, 번호와 기호(-, ※)만 사용하여 어르신들이 읽기 편한 일반 텍스트로 깔끔하게 정리해 주세요.
                         """
                         final_response = model.generate_content(final_prompt)
                         final_summary = final_response.text
@@ -177,17 +217,18 @@ with tab2:
                     
                     final_title = f"[{selected_course}] - {week}주차 {session}강 요약 노트"
                     
-                    # 미리보기 화면 제공
+                    # 🌟 화면 미리보기에서는 지저분한 [강조] 태그를 숨겨서 보여줌
+                    preview_text = final_summary.replace("[강조]", "").replace("[/강조]", "")
                     st.subheader("👀 요약본 미리보기")
-                    st.text(final_summary) # 마크다운 렌더링 대신 원본 텍스트로 보여줌
+                    st.text(preview_text)
                     
                     st.divider()
                     
-                    # 🌟 다운로드 버튼 (워드 파일 제공)
+                    # 워드 파일 생성 및 다운로드 제공
                     word_buffer = generate_word_file(final_title, final_summary)
                     
                     st.download_button(
-                        label="📄 워드 파일(.docx) 다운로드 - 클릭하여 저장하세요",
+                        label="📄 굵은 글씨 및 형광펜이 적용된 워드 파일 다운로드",
                         data=word_buffer,
                         file_name=f"{final_title}.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
