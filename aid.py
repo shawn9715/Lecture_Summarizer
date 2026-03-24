@@ -1,3 +1,21 @@
+에러가 무사히 해결되었다니 정말 다행입니다! 드디어 지긋지긋한 환경 설정의 늪에서 완전히 빠져나오셨네요. 🎉
+
+올려주신 통코드를 꼼꼼히 리뷰해 보았습니다. 코딩 파트너로서 아주 기쁜 소식을 전해드리자면, 회원님이 올려주신 코드 안에 이미 yt-dlp를 활용한 투트랙(웹 자동 추출 vs 파일 업로드) 로직이 완벽하게 들어가 있었습니다! (제가 어제 짜드린 코드를 아주 정확하게 반영해 주셨어요. 👍)
+
+다만, 회원님의 예리한 지적대로 **"사용자가 화면(UI)만 봤을 때는 어떤 링크를 넣어야 하는지 헷갈릴 수 있다"**는 점이 핵심입니다.
+
+따라서, 사용자가 직관적으로 이해할 수 있도록 UI를 **'쓰리트랙(3-Track)'**으로 확실하게 쪼개고, 그에 맞춰 다운로드 방식도 최적화하여 안정성을 극한으로 끌어올리겠습니다.
+
+💡 파트너의 보강 전략 (UI 및 안정성 최적화)
+🌐 1. 일반 웹페이지 주소: (yt-dlp 작동) 페이지 안의 플레이어를 AI가 샅샅이 뒤져서 영상을 뽑아옵니다.
+
+🔗 2. 다이렉트 MP4 링크: (requests 작동) 군더더기 없이 MP4 원본 링크만 빠르게 쏙 다운로드합니다.
+
+📁 3. 직접 파일 업로드: 보안이 너무 철저한 인강 사이트용 최후의 보루입니다.
+
+자, 기존 aid.py 코드에서 아래의 새로운 전체 코드로 덮어씌워 주세요! (UI가 아주 예쁘고 명확하게 바뀌었을 겁니다.)
+
+Python
 import streamlit as st
 import fitz
 import google.generativeai as genai
@@ -30,9 +48,8 @@ video_collection = None
 
 @st.cache_resource
 def init_db_connection():
-    # 서버 응답 대기 시간을 3초(3000ms)로 제한하여 무한 로딩 방지
     client = pymongo.MongoClient(st.secrets["MONGO_URI"], serverSelectionTimeoutMS=3000)
-    client.server_info() # 실제 연결이 가능한지 테스트로 찔러보기
+    client.server_info() 
     return client
 
 try:
@@ -106,12 +123,12 @@ with st.sidebar:
         st.success("🟢 클라우드 DB 연결됨 (영구 저장 모드)")
     else:
         st.warning("🟡 로컬 임시 저장 모드 작동 중")
-        st.caption("DB 연결에 실패하여 서버 내 임시 폴더를 사용합니다. (재부팅 시 파일이 삭제될 수 있습니다.)")
+        st.caption("DB 연결에 실패하여 서버 내 임시 폴더를 사용합니다.")
 
-tab1, tab2 = st.tabs(["📂 1단계: 교안 라이브러리 등록", "🎬 2단계: 동영상 링크 분석 및 요약"])
+tab1, tab2 = st.tabs(["📂 1단계: 교안 라이브러리 등록", "🎬 2단계: 동영상 분석 및 요약"])
 
 # ---------------------------------------------------------
-# [탭 1] 교안 PDF 등록 (DB or 로컬 분기)
+# [탭 1] 교안 PDF 등록
 # ---------------------------------------------------------
 with tab1:
     st.header("1. 교안 PDF 등록하기")
@@ -126,7 +143,6 @@ with tab1:
                 doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
                 full_text = "".join([page.get_text() for page in doc])
                 
-                # 🌟 분기: DB 사용 가능하면 DB에, 아니면 텍스트 파일로 저장
                 if use_db:
                     pdf_collection.update_one(
                         {"course_name": course_name_input},
@@ -140,12 +156,11 @@ with tab1:
                     st.success(f"⚠️ '{course_name_input}' 교안이 로컬 폴더에 임시 저장되었습니다!")
 
 # ---------------------------------------------------------
-# [탭 2] 동영상 분석 및 최종 요약 (투트랙 UI + DB/로컬 분기)
+# [탭 2] 동영상 분석 및 최종 요약 (🌟 3-Track UI 보강)
 # ---------------------------------------------------------
 with tab2:
     st.header("2. 동영상 분석 및 최종 요약본 생성")
     
-    # 🌟 분기: 저장된 강의 목록 불러오기
     saved_pdfs = []
     if use_db:
         saved_pdfs_cursor = pdf_collection.find({}, {"course_name": 1, "_id": 0})
@@ -164,26 +179,34 @@ with tab2:
         st.divider()
         st.subheader("🎬 동영상 입력 방식 선택")
         
+        # 🌟 3가지 방식으로 명확하게 나눈 UI
         input_method = st.radio(
             "어떤 방식으로 동영상을 분석할까요?", 
-            ["🔗 1. 웹페이지 링크(URL) 자동 추출 시도", "📁 2. 내 컴퓨터에서 직접 파일 업로드 (확실한 방법)"]
+            [
+                "🌐 1. 일반 웹페이지 주소 (동영상 자동 추출)", 
+                "🔗 2. 다이렉트 MP4 링크 (https://...mp4)", 
+                "📁 3. 동영상 파일 직접 업로드 (가장 확실한 방법)"
+            ]
         )
         
         video_url = ""
         video_file = None
         
-        if "링크(URL)" in input_method:
-            st.info("💡 유튜브나 보안이 낮은 웹페이지의 주소를 입력하면 자동으로 영상을 찾아냅니다.")
-            video_url = st.text_input("🔗 웹페이지 주소 입력 (예: https://...)")
+        if "일반 웹페이지" in input_method:
+            st.info("💡 사이트 내에 숨겨진 동영상 플레이어를 자동으로 찾아냅니다.")
+            video_url = st.text_input("🌐 웹페이지 주소 입력 (예: https://...)")
+        elif "다이렉트 MP4" in input_method:
+            st.info("💡 동영상 원본 링크(.mp4)를 직접 입력하여 빠르게 다운로드합니다.")
+            video_url = st.text_input("🔗 MP4 링크 입력 (예: https://...mp4)")
         else:
             st.info("💡 유료 인강처럼 로그인이 필요한 사이트는 보안상 직접 업로드해야 합니다.")
-            video_file = st.file_uploader("📁 MP4 동영상 파일 업로드", type=['mp4', 'avi', 'mov'])
+            video_file = st.file_uploader("📁 동영상 파일 업로드", type=['mp4', 'avi', 'mov'])
         
         if st.button("🚀 분석 및 워드(Word) 요약본 생성 시작"):
             if not api_key:
                 st.error("사이드바에 API 키를 입력해 주세요.")
-            elif ("링크(URL)" in input_method) and (not video_url):
-                st.warning("웹페이지 링크를 입력해 주세요.")
+            elif ("웹페이지" in input_method or "MP4" in input_method) and (not video_url):
+                st.warning("링크 주소를 입력해 주세요.")
             elif ("업로드" in input_method) and (not video_file):
                 st.warning("동영상 파일을 업로드해 주세요.")
             else:
@@ -192,15 +215,28 @@ with tab2:
                     temp_video_path = tmp_video.name
                     tmp_video.close()
 
+                    # 🌟 선택한 방식에 따라 다른 다운로드 엔진 사용
                     with st.spinner("1/4. 영상을 준비하고 있습니다... ⏳"):
-                        if "링크(URL)" in input_method:
+                        if "일반 웹페이지" in input_method:
+                            # 플랜 A: yt-dlp로 플레이어 추출
                             ydl_opts = {'format': 'best', 'outtmpl': temp_video_path, 'quiet': True, 'no_warnings': True}
                             try:
                                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                                     ydl.download([video_url])
                             except Exception as e:
-                                raise Exception(f"보안 설정으로 인해 영상 추출에 실패했습니다. 플랜 B(직접 업로드)를 사용해 주세요. (에러: {e})")
+                                raise Exception(f"보안 설정으로 인해 영상 추출에 실패했습니다. 파일 직접 업로드 방식을 사용해 주세요. (에러: {e})")
+                        elif "다이렉트 MP4" in input_method:
+                            # 플랜 B: requests로 다이렉트 다운로드 (가볍고 빠름)
+                            try:
+                                response = requests.get(video_url, stream=True)
+                                response.raise_for_status()
+                                with open(temp_video_path, 'wb') as f:
+                                    for chunk in response.iter_content(chunk_size=8192):
+                                        f.write(chunk)
+                            except Exception as e:
+                                raise Exception(f"MP4 링크 다운로드에 실패했습니다. 주소가 정확한지 확인해 주세요. (에러: {e})")
                         else:
+                            # 플랜 C: 로컬 파일 저장
                             with open(temp_video_path, 'wb') as f:
                                 f.write(video_file.read())
 
@@ -242,7 +278,6 @@ with tab2:
                         genai.delete_file(video_upload.name)
                         os.unlink(temp_video_path)
                         
-                        # 🌟 분기: 영상 요약본 저장 (DB or 로컬)
                         if use_db:
                             video_collection.update_one(
                                 {"course_name": selected_course, "week": week, "session": session},
@@ -255,7 +290,6 @@ with tab2:
                                 f.write(video_key_points)
 
                     with st.spinner("4/4. 최종 노트 필기본을 작성 중입니다... 📝"):
-                        # 🌟 분기: 교안 텍스트 불러오기 (DB or 로컬)
                         if use_db:
                             course_data = pdf_collection.find_one({"course_name": selected_course})
                             course_full_text = course_data["content"]
