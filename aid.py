@@ -6,6 +6,7 @@ import time
 import requests
 import tempfile
 import io
+import yt_dlp
 import re  # 🌟 정규표현식(텍스트 검색)을 위한 라이브러리 추가
 from docx import Document
 from docx.enum.text import WD_COLOR_INDEX  # 🌟 워드 형광펜 색상 기능을 위해 추가
@@ -118,35 +119,73 @@ with tab1:
 with tab2:
     st.header("2. 동영상 분석 및 최종 요약본 생성")
     
-    saved_pdfs = [f.replace(".txt", "") for f in os.listdir("library/pdfs") if f.endswith(".txt")]
+    saved_pdfs_cursor = pdf_collection.find({}, {"course_name": 1, "_id": 0})
+    saved_pdfs = [doc["course_name"] for doc in saved_pdfs_cursor]
     
     if not saved_pdfs:
         st.info("👈 먼저 '1단계' 탭에서 교안을 등록해 주세요.")
     else:
-        selected_course = st.selectbox("📚 분석할 강의 선택 (라이브러리)", saved_pdfs)
+        selected_course = st.selectbox("📚 분석할 강의 선택 (DB 보관함)", saved_pdfs)
         col1, col2 = st.columns(2)
         with col1: week = st.number_input("주차 (예: 1)", min_value=1, step=1)
         with col2: session = st.number_input("강 (예: 1)", min_value=1, step=1)
             
-        video_url = st.text_input("🔗 MP4 동영상 링크 입력 (https://...mp4)")
+        st.divider()
+        st.subheader("🎬 동영상 입력 방식 선택")
+        
+        # 🌟 투트랙 입력 UI 구성
+        input_method = st.radio(
+            "어떤 방식으로 동영상을 분석할까요?", 
+            ["🔗 1. 웹페이지 링크(URL) 자동 추출 시도", "📁 2. 내 컴퓨터에서 직접 파일 업로드 (확실한 방법)"]
+        )
+        
+        video_url = ""
+        video_file = None
+        
+        if "링크(URL)" in input_method:
+            st.info("💡 유튜브나 보안이 낮은 웹페이지의 주소를 입력하면 자동으로 영상을 찾아냅니다.")
+            video_url = st.text_input("🔗 웹페이지 주소 입력 (예: https://...)")
+        else:
+            st.info("💡 유료 인강처럼 로그인이 필요한 사이트는 보안상 직접 업로드해야 합니다.")
+            video_file = st.file_uploader("📁 MP4 동영상 파일 업로드", type=['mp4', 'avi', 'mov'])
         
         if st.button("🚀 분석 및 워드(Word) 요약본 생성 시작"):
             if not api_key:
                 st.error("사이드바에 API 키를 입력해 주세요.")
-            elif not video_url:
-                st.warning("동영상 링크를 입력해 주세요.")
+            elif ("링크(URL)" in input_method) and (not video_url):
+                st.warning("웹페이지 링크를 입력해 주세요.")
+            elif ("업로드" in input_method) and (not video_file):
+                st.warning("동영상 파일을 업로드해 주세요.")
             else:
                 try:
-                    with st.spinner("1/4. 인터넷에서 동영상을 임시 다운로드 중입니다... ⏳"):
-                        response = requests.get(video_url, stream=True)
-                        response.raise_for_status()
-                        
-                        tmp_video = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-                        for chunk in response.iter_content(chunk_size=8192):
-                            tmp_video.write(chunk)
-                        tmp_video.close()
-                        temp_video_path = tmp_video.name
-                        
+                    # 임시 파일 경로 미리 생성
+                    tmp_video = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                    temp_video_path = tmp_video.name
+                    tmp_video.close()
+
+                    # 🌟 1. 동영상 확보 (선택한 방식에 따라 다르게 처리)
+                    with st.spinner("1/4. 영상을 준비하고 있습니다... ⏳"):
+                        if "링크(URL)" in input_method:
+                            # yt-dlp를 이용해 웹페이지에서 영상 추출 시도
+                            ydl_opts = {
+                                'format': 'best',
+                                'outtmpl': temp_video_path,
+                                'quiet': True,
+                                'no_warnings': True
+                            }
+                            try:
+                                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                                    ydl.download([video_url])
+                            except Exception as e:
+                                raise Exception(f"보안 설정이나 로그인 문제로 해당 웹페이지에서 영상을 추출하지 못했습니다. 플랜 B(파일 직접 업로드)를 사용해 주세요. (상세 에러: {e})")
+                        else:
+                            # 업로드된 파일을 임시 경로에 저장
+                            with open(temp_video_path, 'wb') as f:
+                                f.write(video_file.read())
+
+                    # ==========================================================
+                    # 아래 부분은 기존 코드와 100% 동일하게 진행됩니다!
+                    # ==========================================================
                     st.write("2/4. AI 서버에 영상을 올리고 처리하는 중입니다. (수 분 소요) 🧠")
                     progress_bar = st.progress(0)
                     status_text = st.empty()
@@ -160,7 +199,6 @@ with tab2:
                         file_info = genai.get_file(video_upload.name)
                         state = file_info.state.name
                         elapsed = int(time.time() - start_time)
-                        
                         if state == "PROCESSING":
                             status_text.text(f"⏳ 서버에서 영상 분석 준비 중... (현재 {elapsed}초 경과)")
                             progress_bar.progress(min(elapsed, 95))
@@ -170,8 +208,6 @@ with tab2:
                             status_text.success(f"✅ AI 영상 분석 준비 완료! (총 {elapsed}초 소요)")
                             break
                         elif state == "FAILED":
-                            progress_bar.empty()
-                            status_text.empty()
                             raise Exception("AI 서버에서 동영상 처리에 실패했습니다.")
                         else:
                             time.sleep(5)
@@ -186,13 +222,18 @@ with tab2:
                         video_key_points = video_response.text
                         
                         genai.delete_file(video_upload.name)
-                        os.unlink(temp_video_path)
+                        os.unlink(temp_video_path) # 사용이 끝난 로컬 임시 파일 삭제
+                        
+                        video_collection.update_one(
+                            {"course_name": selected_course, "week": week, "session": session},
+                            {"$set": {"content": video_key_points}},
+                            upsert=True
+                        )
 
                     with st.spinner("4/4. 최종 노트 필기본을 작성 중입니다... 📝"):
-                        with open(f"library/pdfs/{selected_course}.txt", "r", encoding="utf-8") as f:
-                            course_full_text = f.read()
+                        course_data = pdf_collection.find_one({"course_name": selected_course})
+                        course_full_text = course_data["content"]
                             
-                        # 🌟 프롬프트 수정: 비밀 태그([강조]) 사용 및 소제목 규칙 지시
                         final_prompt = f"""
                         당신은 훌륭한 사회복지사 학습 조교입니다.
                         아래 두 자료를 대조하여 '{selected_course}'의 {week}주차 {session}강 노트 필기본을 작성해 주세요.
@@ -205,8 +246,8 @@ with tab2:
 
                         [작성 지시 사항 - 매우 중요]
                         1. 내용 대조: [자료 1]의 핵심 내용을 바탕으로 [자료 2]에서 상세한 설명을 찾아 요약하세요.
-                        2. 공통 강조점 하이라이트: 영상(자료 1)과 교안(자료 2) 양쪽 모두에서 중요하게 다뤄진 핵심 단어나 문장은 반드시 앞뒤에 [강조] 와 [/강조] 태그를 붙이세요. (예: [강조]바이스텍의 7대 원칙[/강조]은 반드시 숙지해야 합니다.)
-                        3. 소제목 규칙: 내용의 큰 주제가 바뀔 때는 반드시 "1. 주제명", "2. 주제명" 처럼 숫자와 마침표로 시작하는 소제목을 적어주세요.
+                        2. 공통 강조점 하이라이트: 영상과 교안 양쪽 모두에서 중요하게 다뤄진 핵심 단어나 문장은 반드시 앞뒤에 [강조] 와 [/강조] 태그를 붙이세요. 
+                        3. 소제목 규칙: 내용의 큰 주제가 바뀔 때는 반드시 "1. 주제명" 처럼 숫자와 마침표로 시작하는 소제목을 적어주세요.
                         4. 포맷: 마크다운 기호(**, # 등)는 절대 쓰지 말고, 번호와 기호(-, ※)만 사용하여 어르신들이 읽기 편한 일반 텍스트로 깔끔하게 정리해 주세요.
                         """
                         final_response = model.generate_content(final_prompt)
@@ -216,17 +257,12 @@ with tab2:
                     st.divider()
                     
                     final_title = f"[{selected_course}] - {week}주차 {session}강 요약 노트"
-                    
-                    # 🌟 화면 미리보기에서는 지저분한 [강조] 태그를 숨겨서 보여줌
                     preview_text = final_summary.replace("[강조]", "").replace("[/강조]", "")
                     st.subheader("👀 요약본 미리보기")
                     st.text(preview_text)
-                    
                     st.divider()
                     
-                    # 워드 파일 생성 및 다운로드 제공
                     word_buffer = generate_word_file(final_title, final_summary)
-                    
                     st.download_button(
                         label="📄 굵은 글씨 및 형광펜이 적용된 워드 파일 다운로드",
                         data=word_buffer,
@@ -235,6 +271,6 @@ with tab2:
                     )
 
                 except requests.exceptions.RequestException as e:
-                    st.error(f"동영상 링크 에러: {e}")
+                    st.error(f"인터넷 연결 에러: {e}")
                 except Exception as e:
                     st.error(f"오류가 발생했습니다: {e}")
