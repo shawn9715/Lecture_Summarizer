@@ -3,3 +3,4 @@ PyMuPDF
 google-generativeai
 requests
 python-docx
+yt-dlp
